@@ -1,0 +1,430 @@
+---
+title: "Visualize Enrichment of clustered genes"
+author: "Uwe Schwartz"
+date: "02/12/2024"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+work.path<- "/Volumes/PromisePegasus/_Service_/S048_C3H18_RNAseq/241010_gene_expr/trimmed/Analysis/DiffExp/pairWise_rmvSamps/clustering/k_means/kmeans_groupMedian_7/"
+knitr::opts_knit$set(root.dir =work.path)
+out.path<-paste0(work.path,"Metascape_Viz_v3")
+dir.create(out.path, recursive = T, showWarnings = F)
+```
+
+## Dependencies & Libraries
+
+#### Load packages
+```{r libraries, message=FALSE}
+library(ggplot2)
+library(stringr)
+library(MetBrewer)
+library(clusterProfiler)
+library(enrichplot)
+library(readxl)
+library(pathview)
+library(reshape2)
+library(tidyr)
+library(dplyr)
+library(GO.db)
+```
+
+
+```{r get main Terms}
+pathMETA="costum_min5_bg/"
+
+id.conv<-read_excel(paste0(pathMETA,"/metascape_result.xlsx"),sheet = 1)
+go.results<-read_excel(paste0(pathMETA,"/metascape_result.xlsx"),sheet = 2)
+
+df.summary<-go.results %>% 
+    filter(str_detect(GroupID,"Summary")) %>% 
+    mutate(neg.log.qVal=`Log(q-value)`*(-1)) %>% 
+    mutate(Hits.nGenes=as.numeric(str_split_i(InTerm_InList,"/",1)))
+
+df.summary$Description<-factor(df.summary$Description,
+                       levels = df.summary$Description[
+                           order(df.summary$neg.log.qVal, decreasing = F)])
+
+g.sum<-ggplot(df.summary,aes(x=neg.log.qVal, y=Description, fill=neg.log.qVal, 
+                             size=Hits.nGenes))+
+    geom_point(colour="black",pch=21)+theme_bw()+
+    scale_fill_gradientn(colours=c("white",
+                            met.brewer("Tam", n=100,type="continuous")
+                            ),limits=c(0,max(df.summary$neg.log.qVal)),
+                         name="-log(q-value)")+xlab("-log(q-value)")+ylab("")+
+                        scale_size(range = c(0.5,6), name="number of genes in term")
+
+print(g.sum)
+
+
+```
+
+
+```{r save plot, eval=FALSE, echo=FALSE}
+
+pdf(paste0(out.path,"/Dot_plot_Enrich_numbGenes_GENERAL.pdf"),
+    height = 4, width=7)
+    print(g.sum)
+dev.off()
+
+```
+
+
+```{r function get gene list for network plot}
+get.gene.list<-function(term,dge.table){
+    target.group<-df.summary %>% 
+    filter(Description==term) %>% 
+    pull(GroupID) %>% 
+    str_split_i("_",1)
+
+    df.members<-go.results %>% 
+        filter(GroupID==paste0(target.group,"_Member")) %>% 
+        dplyr::select(Description,Genes)
+    
+    
+    ez.genes.list<-lapply(df.members$Genes, function(x) str_split_1(x,","))
+    names(ez.genes.list)<-df.members$Description
+    #convert to input id
+    ens.genes.list<-lapply(ez.genes.list, 
+                          function(x) id.conv$original_id[match(x,id.conv$Gene)] )
+    #convert to symbol
+    symb.genes.list<-lapply(ens.genes.list, 
+                          function(x) dge.table$symbol_id[match(x,dge.table$id)] )
+    
+    return(symb.genes.list)
+}
+```
+
+
+## network plot
+```{r network plot}
+sig.res<-read.delim("signif_genes.txt")
+log2FC<-sig.res$log2FoldChange
+names(log2FC)<-sig.res$symbol_id
+
+
+heat.genes<-get.gene.list(term="response to heat",dge.table=sig.res)
+
+cnetplot(heat.genes,foldChange=log2FC,cex_label_category = 0.7,
+        showCategory = 20)+
+    scale_color_gradient2(name='log2(FoldChange)', 
+                              low="#2166AC", high="#B2182B")
+```
+```{r save net-plot, eval=FALSE, echo=FALSE }
+
+pdf(paste0(out.path,"/NetWorkPlot_response_to_heat.pdf"), height = 5, width=7)
+    cnetplot(heat.genes,foldChange=log2FC,
+         showCategory = 20)+
+        scale_color_gradient2(name='log2(FoldChange)',  limits = c(-4, 4), 
+                              low="#2166AC", high="#B2182B")
+
+dev.off()
+
+```
+
+```{r networkplot2}
+
+
+x<-get.gene.list(term="megasporogenesis",dge.table=sig.res)
+
+cnetplot(x,foldChange=log2FC,cex_label_category = 0.7,
+        showCategory = 20)+
+    scale_color_gradient2(name='log2(FoldChange)', 
+                              low="#2166AC", high="#B2182B")
+```
+```{r save net-plot2, eval=FALSE, echo=FALSE }
+
+max.val<-max(abs(log2FC[unlist(x)]))
+
+pdf(paste0(out.path,"/NetWorkPlot_megasporogenesis.pdf"), height = 5, width=7)
+    cnetplot(x,foldChange=log2FC,
+         showCategory = 20)+
+        scale_color_gradient2(name='log2(FoldChange)',  limits = c(-max.val, max.val), 
+                              low="#2166AC", high="#B2182B")
+
+dev.off()
+
+```
+```{r networkplot3}
+
+
+x<-get.gene.list(term="flower development",dge.table=sig.res)
+
+cnetplot(x,foldChange=log2FC,cex_label_category = 0.7,
+        showCategory = 20)+
+    scale_color_gradient2(name='log2(FoldChange)', 
+                              low="#2166AC", high="#B2182B")
+```
+```{r save net-plot3, eval=FALSE, echo=FALSE }
+
+max.val<-max(abs(log2FC[unlist(x)]))
+
+pdf(paste0(out.path,"/NetWorkPlot_flower_development.pdf"), height = 7, width=8)
+    cnetplot(x,foldChange=log2FC,
+         showCategory = 20)+
+        scale_color_gradient2(name='log2(FoldChange)',  limits = c(-max.val, max.val), 
+                              low="#2166AC", high="#B2182B")
+
+dev.off()
+
+```
+```{r networkplot4}
+
+
+x<-get.gene.list(term="regulation of protein localization to cell surface",dge.table=sig.res)
+
+cnetplot(x,foldChange=log2FC,cex_label_category = 0.7,
+        showCategory = 20)+
+    scale_color_gradient2(name='log2(FoldChange)', 
+                              low="#2166AC", high="#B2182B")
+```
+```{r save net-plot4, eval=FALSE, echo=FALSE }
+
+max.val<-max(abs(log2FC[unlist(x)]))
+
+pdf(paste0(out.path,"/NetWorkPlot_protein_localization.pdf"), height = 7.5, width=9)
+    cnetplot(x,foldChange=log2FC,
+         showCategory = 20)+
+        scale_color_gradient2(name='log2(FoldChange)',  limits = c(-max.val, max.val), 
+                              low="#2166AC", high="#B2182B")
+
+dev.off()
+
+```
+
+### get cluster analysis
+
+```{r resolve to cluster function}
+getCluster.enrich<-function(pathMETA=pathMETA, df.summary=df.summary){
+    all.GO<-read.csv(paste0(pathMETA, "/Enrichment_GO/GO_AllLists.csv"))
+
+    group.names<-colnames(id.conv)[-c(1,2,grep("GO:",colnames(id.conv)),ncol(id.conv))]
+    
+    df<-data.frame(
+        GO=rep(df.summary$Term,length(group.names)),
+        Description=rep(df.summary$Description,length(group.names)),
+        group=rep(group.names, each=nrow(df.summary)))
+    
+    
+    df.2<-left_join(df, all.GO[,c("GO","GeneList","Log.q.value.","LogP")],
+              join_by(GO==GO, group==GeneList)) %>% 
+        mutate(neg.log.pVal=replace_na(`LogP`,0)*(-1)) %>% 
+        mutate(neg.log.qVal=replace_na(`Log.q.value.`,0)*(-1))  
+    
+    df.2$Hits.nGenes<-0
+    df.2$Genes.ez<-NA
+    df.2$Genes.orig<-NA
+    
+    ## get genes
+    for(i in 1:nrow(df.2)){
+        go.term<-df.2[i,"GO"]
+        
+        group<-df.2[i,"group"]
+        
+        all.GO %>% 
+            filter(CategoryID==all.GO %>% 
+                filter(GO==go.term) %>% 
+                pull(CategoryID)
+            )
+        genes.in.term<-df.summary %>% 
+            filter(Term==go.term) %>% 
+            pull(Genes) %>% 
+            str_split_1(",")
+        
+        genes.df<-id.conv %>% 
+            dplyr::select(Gene,original_id,matches(group)) %>% 
+            filter(across(last_col(), ~.==1)) %>% 
+            filter(Gene %in% genes.in.term)
+        
+        if(nrow(genes.df)>0){
+           df.2[i,"Hits.nGenes"]<-nrow(genes.df)
+           
+           df.2[i,"Genes.ez"]<-genes.df %>% 
+               pull(Gene) %>%
+               paste(collapse=",")
+           
+           df.2[i,"Genes.orig"]<-genes.df %>% 
+               pull(original_id) %>%
+               paste(collapse=",")
+        }    
+    }
+    return(df.2)
+
+}
+
+```
+
+
+
+```{r resolve cluster}
+df.cluster<-getCluster.enrich(pathMETA =pathMETA , df.summary = df.summary )
+
+
+g.gene<-ggplot(df.cluster,aes(x=group, y=Description, fill=neg.log.qVal, 
+                             size=Hits.nGenes))+
+    geom_point(colour="black",pch=21)+theme_bw()+
+    scale_fill_gradientn(colours=c("white",
+                            met.brewer("Tam", n=100,type="continuous")
+                            ),
+                         name="-log(q-value)")+xlab("")+ylab("")+
+                        scale_size(range = c(0.5,6), name="number of genes in term")
+
+print(g.gene)
+
+```
+
+
+```{r use GO from TAIR}
+#prepare TAIR
+data.tair<-read.delim("/Volumes/PromisePegasus/_Service_/S048_C3H18_RNAseq/data/ATH_GO_GOSLIM.txt", 
+                      skip = 4, header = F)
+data.tair.red<-data.tair %>% 
+    filter(V1 %in% id.conv$original_id)
+
+    
+    all.GO<-read.csv(paste0(pathMETA, "/Enrichment_GO/GO_AllLists.csv"))
+
+    group.names<-colnames(id.conv)[-c(1,2,grep("GO:",colnames(id.conv)),ncol(id.conv))]
+    
+    df<-data.frame(
+        GO=rep(df.summary$Term,length(group.names)),
+        Description=rep(df.summary$Description,length(group.names)),
+        group=rep(group.names, each=nrow(df.summary)))
+    
+    
+    df.2<-left_join(df, all.GO[,c("GO","GeneList","Log.q.value.","LogP")],
+              join_by(GO==GO, group==GeneList)) %>% 
+        mutate(neg.log.pVal=replace_na(`LogP`,0)*(-1)) %>% 
+        mutate(neg.log.qVal=replace_na(`Log.q.value.`,0)*(-1))  
+    
+    df.2$Hits.nGenes<-0
+    df.2$Genes.ez<-NA
+    df.2$Genes.orig<-NA
+    
+    ## get genes
+    for(i in 1:nrow(df.2)){
+        go.term<-df.2[i,"GO"]
+        
+        group<-df.2[i,"group"]
+        
+        
+       group.id<-go.results %>% 
+        filter(str_detect(GroupID,"Member")) %>% 
+           filter(Term==go.term) %>% 
+            pull(GroupID)
+    
+       go.term.member<-go.results %>% 
+           filter(GroupID==group.id) %>% 
+           pull(Term)
+       
+       go.complete<-c()
+       for(j in go.term.member){
+           if(is.na(GOBPOFFSPRING[[j]][1])){
+               go.complete <- unique(c(go.complete,j))
+           } else {
+               go.complete <- unique(c(go.complete,j,GOBPOFFSPRING[[j]]))
+           }
+            
+       }
+        
+       genes.in.term<-data.tair.red %>% 
+           filter(V6 %in% go.complete) %>% 
+           pull(V1) %>% 
+           unique()
+       
+        genes.df<-id.conv %>% 
+            dplyr::select(Gene,original_id,matches(group)) %>% 
+            filter(across(last_col(), ~.==1)) %>% 
+            filter(original_id %in% genes.in.term)
+        
+        if(nrow(genes.df)>0){
+           df.2[i,"Hits.nGenes"]<-nrow(genes.df)
+           
+           df.2[i,"Genes.ez"]<-genes.df %>% 
+               pull(Gene) %>%
+               paste(collapse=",")
+           
+           df.2[i,"Genes.orig"]<-genes.df %>% 
+               pull(original_id) %>%
+               paste(collapse=",")
+
+        }    
+    }
+
+    
+
+g.gene<-ggplot(df.2,aes(x=group, y=Description, fill=neg.log.qVal, 
+                             size=Hits.nGenes))+
+    geom_point(colour="black",pch=21)+theme_bw()+
+    scale_fill_gradientn(colours=c("white",
+                            met.brewer("Tam", n=100,type="continuous")
+                            ),
+                         name="-log(q-value)")+xlab("")+ylab("")+
+                        scale_size(range = c(0.5,6), name="number of genes in term")
+
+print(g.gene)
+    
+
+```
+
+```{r save dot plot nGenes, eval=FALSE, echo=FALSE }
+
+
+pdf(paste0(out.path,"/Dot_plot_Enrich_numbGenes_CLUSTER.pdf"),
+    height = 4, width=7)
+    print(g.gene)
+dev.off()
+
+
+```
+
+```{r gene ratio}
+
+n.in.cluster<-apply(id.conv[,df.2 %>% 
+    pull(group) %>% 
+    unique()],2,function(x) sum(as.numeric(x)))
+
+df.info<-data.frame(
+    group=names(n.in.cluster),
+    n.in.cluster=n.in.cluster
+)
+
+df.3<-left_join(df.2,df.info) %>% 
+    mutate(Hits.Ratio=Hits.nGenes/n.in.cluster)
+
+
+g.geneRatio<-ggplot(df.3,aes(x=group, y=Description, fill=neg.log.qVal, 
+                             size=Hits.Ratio))+
+    geom_point(colour="black",pch=21)+theme_bw()+
+    scale_fill_gradientn(colours=c("white",
+                            met.brewer("Tam", n=100,type="continuous")
+                            ),
+                         name="-log(q-value)")+xlab("")+ylab("")+
+                        scale_size(range = c(0.5,6), name="fraction of genes in term")
+
+print(g.geneRatio)
+    
+
+```
+```{r save dot plot ratioGenes, eval=FALSE, echo=FALSE }
+
+
+pdf(paste0(out.path,"/Dot_plot_Enrich_ratioGenes_CLUSTER.pdf"),
+    height = 4.5, width=7)
+    print(g.geneRatio)
+dev.off()
+
+
+```
+
+##Session info
+```{r info}
+sessionInfo()
+
+
+```
+
+
+

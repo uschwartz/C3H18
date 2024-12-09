@@ -1,0 +1,446 @@
+---
+title: "Differential Data Analysis C3H18 Hs"
+author: "Uwe Schwartz"
+date: "21/10/2024"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+work.path<- "/Volumes/PromisePegasus/_Service_/S048_C3H18_RNAseq/241010_gene_expr/trimmed/Analysis/"
+knitr::opts_knit$set(root.dir =work.path)
+out.path<-paste0(work.path,"/DiffExp/pairWise_rmvSamps/")
+dir.create(out.path, recursive = T, showWarnings = F)
+```
+
+## Dependencies & Libraries
+
+#### Load packages
+```{r libraries, message=FALSE}
+library(DESeq2)
+library(RColorBrewer)
+library(ggplot2)
+library(pheatmap)
+library(ggrepel)
+library(tidyverse)
+#palette(unique(c(brewer.pal(9,"Set1"),brewer.pal(8,"Set2"))))
+load("/Users/admin///Library/Mobile Documents/com~apple~CloudDocs/Organisation_NAC/Cooperate_Design/colors/nac_palette_extend.rda")
+palette(nac_palette_extend)
+```
+
+##Import data
+
+```{r DESeq obj}
+# load 
+# load 
+load(file=paste(work.path,"obj/rld.rda",sep="/"))
+load(file="obj/dds.obj.rda")
+load(file="obj/tpm.mat.rda")
+
+# meta data
+colData(dds.obj)
+
+dds.obj$pairs<-factor(paste(dds.obj$genotype,dds.obj$condition, sep="."))
+
+keepIDs<-colData(dds.obj) %>% 
+    as.tibble() %>% 
+    filter(!(ID %in% c("WT_Std_1","mut_Std_4"))) %>% 
+    pull(ID)
+
+dds.obj<-dds.obj[,keepIDs]
+
+#design
+design(dds.obj)<-~pairs
+
+
+## differential gene expression Wald test
+dds.diff<-DESeq(dds.obj)
+
+### get annotation of genes
+# keep only protein-coding or lincRNA
+### get symbol and biotype annotation of genes
+gene.anno<-read.delim("/Users///admin/Annotation/TAIR_10/nextflow/gene_annotation.txt", header = T)
+
+mx<-match(rownames(rowData(dds.diff)),gene.anno$ID)
+rowData(dds.diff)$biotype<-gene.anno$biotype[mx]
+
+table(rowData(dds.diff)$biotype)
+
+### get gene to symbol conversion
+
+rowData(dds.diff)$symbol<-as.character(gene.anno$symbol[mx])
+rowData(dds.diff)$id<-gene.anno$ID[mx]
+
+#combine tracks
+idx.na<-is.na(rowData(dds.diff)$symbol)
+
+symbol_id<-rowData(dds.diff)$symbol
+symbol_id[idx.na]<-as.character(rowData(dds.diff)$id)[idx.na]
+
+rowData(dds.diff)$symbol_id<-symbol_id
+resultsNames(dds.diff)
+```
+
+
+```{r checkpoint1, eval=FALSE, echo=FALSE }
+dir.create(paste(out.path,"obj/",sep="/"), recursive = T, showWarnings = F)
+
+save(dds.diff, file=paste(out.path,"obj/dds.diff.rda",sep="/"))
+
+```
+
+## WT.Std vs mut.Std
+
+```{r  WT.Std vs mut.Std}
+#### differential analysis
+ctrl="WT.HS"
+cond="mut.HS"
+
+res<-results(dds.diff, contrast=c("pairs",cond, ctrl))
+summary(res, alpha=0.05)
+
+## pVal_distribution
+hist(res$pvalue[res$baseMean > 1], breaks = 0:20/20,
+       col = "grey50", border = "white", xlab="p-Value", main="pVal distribution")
+     
+
+#MA plot before shrinkage
+max.lfc<-max(abs(res$log2FoldChange),na.rm = T)
+
+DESeq2::plotMA(res,ylim = c(-max.lfc, max.lfc), cex=0.5,
+               colSig=1, alpha=0.05)
+```
+
+```{r shrinkage}
+
+#shrinkage
+res.shr <- lfcShrink(dds.diff, 
+                     contrast=c("pairs",cond, ctrl), 
+                     res=res, type = "ashr") 
+
+
+# get Gene annotation
+res.pre<-cbind(res.shr,rowData(dds.diff)[rownames(res.shr),
+                                    c("id","biotype", "symbol_id")],
+           tpm.mat[row.names(res.shr),order(colnames(tpm.mat))])
+
+head(res.pre[order(res$padj),])
+
+
+# filter genes that have at least 1 TPM for each sample in a group
+cond.samps<-colData(dds.diff) %>% 
+    as.tibble() %>% 
+    filter(pairs %in% cond) %>% 
+    pull(ID)
+
+ctrl.samps<-colData(dds.diff) %>% 
+    as.tibble() %>% 
+    filter(pairs %in% ctrl) %>% 
+    pull(ID)
+
+
+cond.pos<-res.pre %>% as.tibble() %>% 
+    select(contains(cond.samps)) %>% 
+    apply(1,function(x) sum(x>1)==length(cond.samps))
+
+ctrl.pos<-res.pre %>% as.tibble() %>% 
+    select(contains(ctrl.samps)) %>% 
+    apply(1,function(x) sum(x>1)==length(ctrl.samps))
+
+    
+res<-res.pre[(ctrl.pos | cond.pos),]
+
+
+## set thresholds
+p.th<-0.05
+logFC<-1
+
+### significant hits
+res.sig<-subset(res, padj<p.th & abs(log2FoldChange) > logFC)
+#significant hits up regulated
+table(res.sig$log2FoldChange>0)
+
+################################################################################
+##########################  MA Plot     ########################################
+################################################################################
+df<-data.frame(subset(res, !is.na(res$padj)))
+
+df$signif<-df$padj<=p.th & abs(df$log2FoldChange)>logFC
+
+df$colorBI<-"ns"
+df$colorBI[df$signif & df$log2FoldChange>0]<-"up"
+df$colorBI[df$signif & df$log2FoldChange<0]<-"down"
+
+df$colorBI<-factor(df$colorBI,levels = c("ns","down","up"))
+
+n.group<-table(df$colorBI)
+###########################################################
+
+g.MA<-ggplot(df, aes(log10(baseMean),log2FoldChange))+
+    geom_point(aes(color=colorBI))+
+    theme_bw()+
+    xlab("log10(normalized counts)")+
+    scale_color_manual(values=c("grey90","#1F78B4","#E31A1C"),
+                       labels=c(paste("ns",n.group["ns"], sep="="),
+                                paste("down",n.group["down"], sep="="),
+                                paste("up",n.group["up"], sep="=")))+
+    geom_point(data=subset(df,df$colorBI=="up"),
+               aes(log10(baseMean),log2FoldChange), color="#E31A1C")+
+    geom_point(data=subset(df,df$colorBI=="down"),
+               aes(log10(baseMean),log2FoldChange), color="#1F78B4")+
+    theme(legend.position = "top", 
+          legend.text = element_text(size=15),
+          )+
+    guides(colour = guide_legend("",override.aes = list(size = 3)), 
+          )+
+    geom_hline(yintercept = c(logFC,-logFC),  linetype="dashed")+
+    geom_hline(yintercept =0, color= "grey20",alpha = 0.3, size=1.5  )+
+    ggtitle(paste0("FDR = ",p.th ," & |log2FC| > ",logFC))
+
+g.MA
+```
+
+```{r heatmap}
+## heatmap of significant genes 
+mat<-assay(rld)[rownames(res.sig),colnames(dds.diff)]
+rownames(mat)<- res.sig$symbol
+anno<-as.data.frame(colData(rld)[,c("genotype", "condition")])
+
+rld.2<-rld[,colnames(dds.diff)]
+
+colData(rld.2)
+ordCol<-colData(rld.2)[order(rld.2$condition,rld.2$genotype,decreasing = T),
+                       "ID"]
+
+#tested samples
+print(pheatmap(mat[,c(ctrl.samps,cond.samps)],scale="row", 
+               annotation_col = anno,show_rownames  = F,
+               cluster_cols = F,#breaks = seq(-2,2,length.out= 101),
+               color = colorRampPalette(rev(brewer.pal(n = 7, name ="RdBu")))(100))
+      ) 
+
+#all samples  
+print(pheatmap(mat[,ordCol],scale="row", 
+               annotation_col = anno,show_rownames  = F,
+               cluster_cols = F,breaks = seq(-2.5,2.5,length.out= 101),
+               color = colorRampPalette(rev(brewer.pal(n = 7, name ="RdBu")))(100))
+      ) 
+
+
+
+```
+
+```{r volcano}
+################################################################################
+########################## volcano plot ########################################
+################################################################################
+
+df<-data.frame(subset(res, !is.na(res$padj)))
+
+df$signif<-df$padj<=p.th & abs(df$log2FoldChange)>logFC
+
+df$colorBI<-"ns"
+df$colorBI[df$signif & df$log2FoldChange>0]<-"up"
+df$colorBI[df$signif & df$log2FoldChange<0]<-"down"
+
+df$colorBI<-factor(df$colorBI,levels = c("ns","down","up"))
+
+n.group<-table(df$colorBI)
+#################################################################
+
+g.volc<-ggplot(df, aes(log2FoldChange,log10(padj)*c(-1)))+
+    geom_point(aes(color=colorBI))+theme_bw()+ylab("-log10(p.adj)")+
+    scale_color_manual(values=c("grey90","#1F78B4","#E31A1C"),
+                       labels=c(paste("ns",n.group["ns"], sep="="),
+                                paste("down",n.group["down"], sep="="),
+                                paste("up",n.group["up"], sep="=")))+
+    geom_point(data=subset(df,df$colorBI=="up"),
+               aes(log2FoldChange,log10(padj)*c(-1)), color="#E31A1C")+
+    geom_point(data=subset(df,df$colorBI=="down"),
+               aes(log2FoldChange,log10(padj)*c(-1)), color="#1F78B4")+
+    guides(colour = guide_legend("",override.aes = list(size = 3)))+ 
+    theme(legend.position = "top",
+          legend.text = element_text(size=15))+
+    geom_segment(aes(x = logFC, y = -log10(p.th), xend=Inf, yend=-log10(p.th)),  linetype="dashed")+
+    geom_segment(aes(x =-logFC, y =-log10(p.th), xend=-Inf, yend=-log10(p.th)),  linetype="dashed")+
+    geom_segment(aes(x = logFC, y = -log10(p.th), xend=1, yend=Inf),  linetype="dashed")+
+    geom_segment(aes(x =-logFC, y =-log10(p.th), xend=-1, yend=Inf),  linetype="dashed")+
+#   geom_hline(yintercept = -log10(p.th),  linetype="dashed")+
+    ggtitle(paste0("FDR = ",p.th ," & |log2FC| > ",logFC))
+g.volc    
+
+
+############################
+#get top 20 p-adjusted value
+df.sign<-subset(df, signif)
+df.top<-df.sign[order(df.sign$padj)[1:20],]
+
+
+print(g.volc+geom_text_repel(data = df.top,
+                        aes(label = symbol_id),
+                        size = 3,max.overlaps = NA,
+                        box.padding = unit(0.3, "lines"),
+                        point.padding = unit(0.2, "lines")))
+
+
+
+
+```
+
+```{r diff exp save data, eval=F, echo=FALSE }
+path.plots=paste(out.path,paste(cond,ctrl,sep = "_vs_"),"/plots/",sep="/")
+dir.create(path.plots, showWarnings = F, recursive = T)
+
+path.obj=paste(out.path,paste(cond,ctrl,sep = "_vs_"),"/obj",sep="/")
+dir.create(path.obj, showWarnings = F, recursive = T)
+
+
+pdf(paste0(path.plots,"/MA_Shrinkage.pdf"), width=5,height = 5)
+    print(g.MA)
+dev.off()
+
+## pVal_distribution
+pdf(paste0(path.plots,"/pVal_histogram.pdf"), width=5,height = 5)
+    hist(res$pvalue[res$baseMean > 1], breaks = 0:20/20,
+       col = "grey50", border = "white", xlab="p-Value",
+       main="pVal distribution")
+dev.off()
+
+save(res, file=paste0(path.obj,"/res.rda"))
+
+write.table(res[order(res$pvalue),], file=paste0(out.path,"/",
+                                paste(cond,ctrl,sep = "_vs_"),"/res_table.txt"),
+            row.names = F,quote=F, sep="\t")
+
+
+############### glimma ## eploratory
+  library(Glimma)
+  library(edgeR)
+  
+  
+  res.df<-as.data.frame(res)
+  res.df$log10MeanNormCount<-log10(res.df$baseMean)
+  
+  # filter not expressed genes
+  res.df$padj[is.na(res.df$padj)]<-1
+  
+  #get stat
+  wx<-which(rownames(res.df) %in% rownames(res.sig))
+  stat<-rep(0,nrow(res.df))
+  stat[wx]<-rep(1,length(wx))
+  
+  
+  glMDPlot(res.df, 
+           xval = "log10MeanNormCount",
+           yval="log2FoldChange",
+           counts=counts(dds.diff, normalized=T)[rownames(res),],
+           anno=data.frame(GeneID=rownames(dds.diff[rownames(res),])),
+           groups=dds.diff$pairs,
+           samples=colnames(dds.diff),
+           display.columns = c("symbol_id","log2FoldChange" ,"padj", "id",
+                               "biotype"),
+           status = stat,
+           path = paste0(out.path,"/",paste(cond,ctrl,sep = "_vs_"),"/",""))
+
+##########################
+save(res.sig, file=paste0(path.obj,"/res.sig.rda"))
+
+### significant  
+write.table(res.sig[order(res.sig$padj),],
+              file=paste0(out.path,"/",paste(cond,ctrl,sep = "_vs_"),
+                          "/signif_genes.txt"), sep="\t",
+              quote=F, col.names=T, row.names = F)
+  
+  
+  
+## for metascape
+path.meta=paste(out.path,paste(cond,ctrl,sep = "_vs_"),"/Metascape",sep="/")
+dir.create(path.meta, showWarnings = F, recursive = T)
+
+### universe
+# filter not expressed genes
+idx<-rowSums(counts(dds.diff))>5
+res.df.fil<-(res.df[idx,])
+  
+universe<-na.omit(res.df.fil[!is.na(res.df.fil$padj),"id"])
+write.table(universe,
+              file=paste0(path.meta,"/universe_genes_id.txt"), sep="\n",
+              quote=F, col.names=F, row.names = F)
+
+
+## down and up -regulated genes
+res.up<-subset(res.sig, log2FoldChange>0)
+save(res.up, file=paste0(path.obj,"/res.up.rda"))
+  
+res.down<-subset(res.sig, log2FoldChange<0)
+save(res.down, file=paste0(path.obj,"/res.down.rda"))
+  
+write.table(na.omit(res.up$id), 
+              file=paste0(path.meta,"/upReg_genes_id.txt"), sep="\n",
+              quote=F, col.names=F, row.names = F)
+write.table(na.omit(res.down$id),
+              file=paste0(path.meta,"/downReg_genes_id.txt"), sep="\n",
+              quote=F, col.names=F, row.names = F)
+
+#combine
+combined<-data.frame(Name=c("up","down"),
+           Genes=c(paste(na.omit(res.up$id), collapse = ","),
+                   paste(na.omit(res.down$id), collapse = ",")))
+
+write.table(combined,
+              file=paste0(path.meta,"/combined_genes_id.txt"), sep="\t",
+              quote=F, col.names=F, row.names = F)
+
+
+
+### heatmap
+dev.off()
+
+pdf(paste0(path.plots,"/heatmap_signif_genes_all_samps.pdf"),
+    height=5, width = 7, onefile = F)
+
+    idx<-colData(rld)[ordCol,"genotype"]=="C118F"
+
+    #all samples  
+    print(pheatmap(mat[,c(ordCol)],scale="row", 
+                   annotation_col = anno,show_rownames  = F,
+                   cluster_cols = F,#breaks = seq(-2,2,length.out= 101),
+                   color = colorRampPalette(rev(brewer.pal(n = 7, name ="RdBu")))(100))
+          ) 
+
+#dev.off()
+
+pdf(paste0(path.plots,"/heatmap_signif_genes.pdf"),
+    height=5, width = 4, onefile = F)
+    print(pheatmap(mat[,c(ctrl.samps,cond.samps)],scale="row", 
+               annotation_col = anno,show_rownames  = F,
+               cluster_cols = F,#breaks = seq(-2,2,length.out= 101),
+               color = colorRampPalette(rev(brewer.pal(n = 7, name ="RdBu")))(100))
+      ) 
+dev.off()
+
+
+
+#### volcano
+pdf(paste0(path.plots,"/volcano.pdf"), width=5, height = 5)
+    print(g.volc+geom_text_repel(data = df.top,
+                        aes(label = symbol_id),
+                        size = 2.5,max.overlaps = NA,
+                        box.padding = unit(0.3, "lines"),
+                        point.padding = unit(0.2, "lines")))
+dev.off()
+
+
+```
+
+
+##Session info
+```{r info}
+sessionInfo()
+
+
+```
+
+
+

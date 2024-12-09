@@ -1,0 +1,263 @@
+---
+title: "Differential Data Analysis C3H18 clustering"
+author: "Uwe Schwartz"
+date: "06/11/2024"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+work.path<- "/Volumes/PromisePegasus/_Service_/S048_C3H18_RNAseq/241010_gene_expr/trimmed/Analysis/DiffExp/pairWise_rmvSamps/"
+knitr::opts_knit$set(root.dir =work.path)
+out.path<-paste0(work.path,"clustering/k_means/")
+dir.create(out.path, recursive = T, showWarnings = F)
+```
+
+## Dependencies & Libraries
+
+#### Load packages
+```{r libraries, message=FALSE}
+library(DESeq2)
+library(RColorBrewer)
+library(ggplot2)
+library(pheatmap)
+library(ggrepel)
+library(tidyverse)
+#palette(unique(c(brewer.pal(9,"Set1"),brewer.pal(8,"Set2"))))
+load("/Users/admin///Library/Mobile Documents/com~apple~CloudDocs/Organisation_NAC/Cooperate_Design/colors/nac_palette_extend.rda")
+palette(nac_palette_extend)
+```
+
+##Import data
+
+```{r load obj}
+load("obj/dds.diff.rda")
+load("../../obj/rld.rda")
+load("mut.Std_vs_WT.Std/obj/res.sig.rda")
+
+```
+
+```{r prepare for clustering}
+mat<-assay(rld)[rownames(res.sig),colnames(dds.diff)]
+
+rld.2<-rld[,colnames(dds.diff)]
+ordCol<-colData(rld.2)[order(rld.2$condition,rld.2$genotype,decreasing = T),
+                       "ID"]
+
+#sort Cols
+meta.all<-colData(rld.2) %>% 
+    as.tibble() 
+
+# split groups
+id.list<-split(meta.all$ID, 
+      as.factor(paste(meta.all$genotype,meta.all$condition, sep = ":")))
+#get median by group
+mat.median<-sapply(id.list, function(x) apply(mat[,x],1,median))
+#z-scores
+mat.median.z<-t(apply(mat.median,1,scale))
+colnames(mat.median.z)<-colnames(mat.median)
+
+
+```
+
+
+
+## clustering
+```{r clustering, eval=F, echo=F}
+colramp<-colorRampPalette(rev(brewer.pal(n = 7, name ="RdBu")))(100)
+
+for(i in 4:10){
+#i=3
+out.path.plots<-paste0(out.path,"/kmeans_",i)
+dir.create(out.path.plots, recursive = T, showWarnings = F)
+
+set.seed(123)
+p.cl<-pheatmap(mat[,ordCol],scale = "row", 
+         color = colramp, border_color=NA, kmeans_k = i,
+         cluster_cols = F, cluster_rows = F, show_rownames = F)
+
+ord.cl<-order(p.cl$kmeans$cluster)
+#table(p.cl$kmeans$cluster)
+
+nCL<-length(unique(p.cl$kmeans$cluster))
+cl_col<-brewer.pal(n = nCL, name ="Set3")[1:nCL]
+names(cl_col)<-as.character(1:nCL)
+anno_colors<-list()
+anno_colors[["cluster"]]<-cl_col
+
+anno_row<-data.frame(cluster=as.factor(p.cl$kmeans$cluster))
+rNames<-names(p.cl$kmeans$cluster)
+row.names(anno_row)<-rNames
+
+anno_col<-select(as.data.frame(colData(dds.diff)),genotype,condition) 
+
+genotype_col<-nac_palette_extend[1:2]
+names(genotype_col)<-unique(anno_col$genotype)
+anno_colors[["genotype"]]<-genotype_col
+
+condition_col<-nac_palette_extend[3:4]
+names(condition_col)<-unique(anno_col$condition)
+anno_colors[["condition"]]<-condition_col
+
+dev.off()
+pdf(paste0(out.path.plots,"/heat_cl.pdf"), width = 4.5, height = 4, onefile = T)
+   print( pheatmap(mat[ord.cl,ordCol],scale = "row",
+                   color = colramp, border_color=NA,
+         cluster_cols = F, cluster_rows = F, show_rownames = F,
+         annotation_row =anno_row ,annotation_colors = anno_colors,
+         annotation_col = anno_col,show_colnames = F))
+dev.off()
+
+
+
+
+### get centroids
+df.center<-melt(p.cl$kmeans$centers, varnames = c("cluster","sample"),
+     value.name = "zScores")
+
+df.center$condition<-factor(str_split_i(df.center$sample,"_",2 ),
+                            levels = c("Std","HS") )
+df.center$genotype<-factor(str_split_i(df.center$sample,"_",1), 
+                           levels = c("WT","mut")) 
+
+
+  
+p<-ggplot(df.center, aes(x=condition, y=zScores, group=genotype, color=genotype))
+p<-p+facet_grid(cluster ~ .)+theme_bw()
+p<-p+geom_line(stat="summary", fun=mean)
+p<-p+geom_point()+scale_color_manual(values=c("#1B9E77","#D95F02"))
+
+
+pdf(paste0(out.path.plots,"/cluster_centroids.pdf"), width = 4, height = 3.5)
+  print(p)  
+dev.off()
+
+cl.df<-data.frame(id=names(p.cl$kmeans$cluster),cluster=p.cl$kmeans$cluster)
+res.sig.cl<-left_join(as_tibble(res.sig), cl.df, by="id")
+
+### significant  
+write.table(res.sig.cl[order(res.sig.cl$padj),],
+              file=paste0(out.path.plots,"/signif_genes.txt"), sep="\t",
+              quote=F, col.names=T, row.names = F)
+## metascape
+list.cl<-split(cl.df$id,as.factor(cl.df$cluster))
+collapsed<-sapply(list.cl, function(x) paste(x,collapse = ","))
+combined<-data.frame(cluster=paste0("cl",names(collapsed)),
+           genes=collapsed)
+
+
+write.table(combined,
+              file=paste0(out.path.plots,"/cluster_metascape.txt"), sep="\t",
+              quote=F, col.names=F, row.names = F)
+}
+
+
+```
+
+```{r clustering group median, eval=F}
+colramp<-colorRampPalette(rev(brewer.pal(n = 7, name ="RdBu")))(100)
+
+for(i in 3:10){
+    #i=3
+    out.path.plots<-paste0(out.path,"/kmeans_groupMedian_",i)
+    dir.create(out.path.plots, recursive = T, showWarnings = F)
+    
+    set.seed(111)
+    p.cl<-pheatmap(mat.median,scale = "row", 
+             color = colramp, border_color=NA, kmeans_k = i,
+             cluster_cols = F, cluster_rows = F, show_rownames = F)
+    
+    ord.cl<-order(p.cl$kmeans$cluster)
+    #table(p.cl$kmeans$cluster)
+    
+    nCL<-length(unique(p.cl$kmeans$cluster))
+    cl_col<-brewer.pal(n = nCL, name ="Set3")[1:nCL]
+    names(cl_col)<-as.character(1:nCL)
+    anno_colors<-list()
+    anno_colors[["cluster"]]<-cl_col
+    
+    anno_row<-data.frame(cluster=as.factor(p.cl$kmeans$cluster))
+    rNames<-names(p.cl$kmeans$cluster)
+    row.names(anno_row)<-rNames
+    
+    anno_col<-select(as.data.frame(colData(dds.diff)),genotype,condition) 
+    
+    genotype_col<-nac_palette_extend[1:2]
+    names(genotype_col)<-unique(anno_col$genotype)
+    anno_colors[["genotype"]]<-genotype_col
+    
+    condition_col<-nac_palette_extend[3:4]
+    names(condition_col)<-unique(anno_col$condition)
+    anno_colors[["condition"]]<-condition_col
+    
+    dev.off()
+    pdf(paste0(out.path.plots,"/heat_cl.pdf"), width = 4.5, height = 4, onefile = T)
+       print( pheatmap(mat[ord.cl,ordCol],scale = "row",
+                       color = colramp, border_color=NA,
+             cluster_cols = F, cluster_rows = F, show_rownames = F,
+             annotation_row =anno_row ,annotation_colors = anno_colors,
+             annotation_col = anno_col,show_colnames = F))
+    dev.off()
+    
+    
+    df.plot<-melt(mat.median.z,value.name = "z.score", 
+             varnames = c("gene","condition"))
+        
+        #add clusters
+         df.plot$cluster<-p.cl$kmeans$cluster[match(df.plot$gene,
+                                                 names(p.cl$kmeans$cluster))]
+         df.plot$treatment<-factor(str_split_i(as.character(df.plot$condition), 
+                                                  "\\:",2), levels=c("Std","HS"))
+         df.plot$genotype<-factor(str_split_i(as.character(df.plot$condition), 
+                                                  "\\:",1),levels=c("WT","mut"))
+         
+        ## ggplot
+        p<-ggplot(df.plot, aes(x=treatment, y=z.score, color=genotype))
+        p<-p+facet_grid(cluster ~ .)+theme_bw()
+        p.genes<-p+geom_boxplot() + 
+            scale_color_manual(values = nac_palette_extend[1:2])
+        
+        pdf(paste0(out.path.plots,"/boxplots_cl.pdf"), width = 3.5, height = 1+i*0.8, 
+            onefile = T)
+            print(p.genes)
+        dev.off()
+    
+    #write significant        
+    cl.df<-data.frame(id=names(p.cl$kmeans$cluster),cluster=p.cl$kmeans$cluster)
+    res.sig.cl<-left_join(as_tibble(res.sig), cl.df, by="id")
+
+    ### significant  
+    write.table(res.sig.cl[order(res.sig.cl$padj),],
+                  file=paste0(out.path.plots,"/signif_genes.txt"), sep="\t",
+                  quote=F, col.names=T, row.names = F)
+        
+        
+    ## metascape
+    list.cl<-split(cl.df$id,as.factor(cl.df$cluster))
+    collapsed<-sapply(list.cl, function(x) paste(x,collapse = ","))
+    combined<-data.frame(cluster=paste0("cl",names(collapsed)),
+               genes=collapsed)
+    
+    
+    write.table(combined,
+                  file=paste0(out.path.plots,"/cluster_metascape.txt"), sep="\t",
+                quote=F, col.names=F, row.names = F)
+}
+
+
+```
+
+
+
+
+
+##Session info
+```{r info}
+sessionInfo()
+
+
+```
+
+
+

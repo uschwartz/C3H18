@@ -1,0 +1,89 @@
+---
+title: "Differential Data Analysis C3H18 clustering"
+author: "Uwe Schwartz"
+date: "04/12/2024"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+work.path<- "/Volumes/PromisePegasus/_Service_/S048_C3H18_RNAseq/241010_gene_expr/trimmed/Analysis/DiffExp/pairWise_rmvSamps/"
+knitr::opts_knit$set(root.dir =work.path)
+out.path<-paste0(work.path,"plots/")
+dir.create(out.path, recursive = T, showWarnings = F)
+```
+
+## Dependencies & Libraries
+
+#### Load packages
+```{r libraries, message=FALSE}
+library(DESeq2)
+library(RColorBrewer)
+library(ggplot2)
+library(pheatmap)
+library(ggrepel)
+library(tidyverse)
+#palette(unique(c(brewer.pal(9,"Set1"),brewer.pal(8,"Set2"))))
+load("/Users/admin///Library/Mobile Documents/com~apple~CloudDocs/Organisation_NAC/Cooperate_Design/colors/nac_palette_extend.rda")
+palette(nac_palette_extend)
+```
+
+##Import data
+
+```{r load obj}
+load("obj/dds.diff.rda")
+load("../../obj/rld.rda")
+load("mut.Std_vs_WT.Std/obj/res.sig.rda")
+
+```
+
+```{r prepare for heatmap}
+
+rld.2<-rld[,colnames(dds.diff)]
+ordCol<-colData(rld.2)[order(rld.2$condition,rld.2$genotype,decreasing = T),
+                       "ID"]
+
+input.table<-read_excel("../../../../../info/selected genes for heatmap.xlsx")
+
+mat<-assay(rld.2)[input.table$id,]
+rownames(mat)<-input.table$symbol_id
+
+colramp<-colorRampPalette(rev(brewer.pal(n = 7, name ="RdBu")))(100)
+anno_colors<-list()
+
+anno_col<-dplyr::select(as.data.frame(colData(dds.diff)),genotype,condition) 
+
+genotype_col<-nac_palette_extend[1:2]
+names(genotype_col)<-unique(anno_col$genotype)
+anno_colors[["genotype"]]<-genotype_col
+
+condition_col<-nac_palette_extend[3:4]
+names(condition_col)<-unique(anno_col$condition)
+anno_colors[["condition"]]<-condition_col
+
+dev.off()
+pdf(paste0(out.path,"/heatmap_selected.pdf"), width = 4.5, height = 4, onefile = T)
+   print( pheatmap(mat[,ordCol],scale = "row",
+                   color = colramp, border_color=NA,
+         cluster_cols = F, cluster_rows = T, show_rownames = T,
+        annotation_colors = anno_colors,
+         annotation_col = anno_col,show_colnames = F))
+dev.off()
+
+
+```
+
+
+
+
+
+##Session info
+```{r info}
+sessionInfo()
+
+
+```
+
+
+
